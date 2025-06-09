@@ -106,6 +106,46 @@ texts = {
     "collision": {
         "English": "Collision",
         "中文": "碰撞"
+    },
+    "detecting": {
+        "English": "Detecting",
+        "中文": "偵測中"
+    },
+    "current_speed": {
+        "English": "Current Speed",
+        "中文": "當前速度"
+    },
+    "deceleration_params": {
+        "English": "Deceleration Parameters",
+        "中文": "減速參數設定"
+    },
+    "detection_distance": {
+        "English": "Detection Distance (m)",
+        "中文": "偵測距離 (m)"
+    },
+    "accel_rate": {
+        "English": "Acceleration Rate (m/s²)",
+        "中文": "加速率 (m/s²)"
+    },
+    "deaccel_factor_close": {
+        "English": "Close Range Deceleration Factor",
+        "中文": "近距離減速係數"
+    },
+    "deaccel_factor_far": {
+        "English": "Far Range Deceleration Factor",
+        "中文": "遠距離減速係數"
+    },
+    "normal_driving": {
+        "English": "Normal Driving",
+        "中文": "正常行駛"
+    },
+    "detecting_pedestrian": {
+        "English": "Detecting Pedestrian",
+        "中文": "偵測到行人"
+    },
+    "accelerating": {
+        "English": "Accelerating",
+        "中文": "加速行駛"
     }
 }
 
@@ -124,11 +164,18 @@ with col1:
     initial_distance = st.slider(texts["initial_distance"][language], 5.0, 30.0, 20.0)
     n_pedestrians = st.slider(texts["pedestrian_count"][language], 1, 5, 3)
     hesitation_prob = st.slider(texts["hesitation_prob"][language], 0.0, 1.0, 0.3)
-    deaccel_rate = st.slider(texts["deaccel_rate"][language], 1.0, 5.0, 2.0)
+    
+    # 新增減速相關參數
+    st.subheader(texts["deceleration_params"][language])
+    detection_distance = st.slider(texts["detection_distance"][language], 5.0, 20.0, 15.0)
+    deaccel_rate = st.slider(texts["deaccel_rate"][language], 0.5, 5.0, 2.0)
+    accel_rate = st.slider(texts["accel_rate"][language], 0.5, 5.0, 1.0)
+    deaccel_factor_close = st.slider(texts["deaccel_factor_close"][language], 1.0, 3.0, 1.5)
+    deaccel_factor_far = st.slider(texts["deaccel_factor_far"][language], 0.1, 1.0, 0.5)
 
 # 模擬參數 / Simulation Parameters
 frames = 100
-simulation_time = 5.0
+simulation_time = 10.0  # 增加模擬時間
 ped_speed_range = (ped_speed * 0.8, ped_speed * 1.2)
 reaction_threshold_range = (2.0, 4.5)
 safe_gap = 1.5
@@ -171,6 +218,7 @@ for i in range(frames):
     ax.set_xlim(0, initial_distance)
     ax.set_ylim(-2.5, 2.5)
     current_time = time_points[i]
+    time_step = simulation_time / frames  # 計算每個時間步長
 
     # 車輛位置更新 / Vehicle Position Update
     car_x = car_positions[i - 1] if i > 0 else car_positions[0]
@@ -198,9 +246,16 @@ for i in range(frames):
             ped['color'] = 'gray'
 
         # 碰撞判斷 / Collision Detection
-        if -0.2 <= ped['y'] <= 0.2 and abs(car_x - initial_distance / 2) <= 1.0:
-            ped['collision'] = True
-            ped['color'] = 'red'
+        if ped['started'] and -0.2 <= ped['y'] <= 0.2:
+            # 增加安全距離，避免碰撞
+            if abs(car_x - initial_distance / 2) <= 3.0:
+                ped['collision'] = True
+                ped['color'] = 'red'
+                # 如果發生碰撞，立即停止車輛
+                car_v = 0
+                car_acc = 0
+                car_x = car_positions[i-1]  # 保持在上一個位置
+                car_positions[i] = car_x
 
         # 找出最近行人 / Find Closest Pedestrian
         if ped['started'] and ped['y'] < 1.5:
@@ -210,13 +265,71 @@ for i in range(frames):
                 closest_ped = ped
 
     # 車輛減速邏輯 / Vehicle Deceleration Logic
-    if closest_ped and abs(car_x - initial_distance / 2) < 5.0:
-        car_acc = -deaccel_rate
-    else:
-        car_acc = 0
+    car_color = 'blue'  # 預設顏色（正常行駛）
+    car_status = texts["normal_driving"][language]  # 預設狀態
 
-    car_v = max(car_v + car_acc * (simulation_time / frames), 0)
-    car_x = max(car_x - car_v * (simulation_time / frames), 0)
+    # 計算車輛到斑馬線的距離
+    distance_to_crossing = car_x - initial_distance / 2
+
+    # 只在車輛接近斑馬線時才進行偵測
+    if distance_to_crossing > 0 and distance_to_crossing < detection_distance:
+        if closest_ped:
+            # 計算與行人的實際距離（考慮Y軸距離）
+            distance_to_ped = np.sqrt((distance_to_crossing)**2 + (closest_ped['y'] + 1.5)**2)
+            
+            # 如果行人正在過馬路或準備過馬路
+            if (closest_ped['started'] and closest_ped['y'] < 1.5) or \
+               (not closest_ped['started'] and distance_to_ped < detection_distance and closest_ped['y'] > -2.0):
+                car_color = 'orange'  # 偵測到行人時變為橙色
+                car_status = texts["detecting_pedestrian"][language]
+                
+                # 確保車輛一定會減速
+                if distance_to_crossing < 3.0:  # 非常接近斑馬線時
+                    car_acc = -deaccel_rate * 2.0  # 強力減速
+                elif distance_to_crossing < 5.0:  # 接近斑馬線時
+                    car_acc = -deaccel_rate * 1.5
+                elif distance_to_crossing < 8.0:  # 較近時
+                    car_acc = -deaccel_rate
+                else:  # 較遠時開始緩慢減速
+                    car_acc = -deaccel_rate * 0.8
+
+                # 確保速度不會太快
+                if car_v > 3.0 and distance_to_crossing < 5.0:
+                    car_acc = min(car_acc, -deaccel_rate * 1.5)
+            else:
+                # 如果行人已經通過或距離足夠遠，可以加速回到原速
+                if car_v < vehicle_speed:
+                    car_acc = accel_rate  # 使用設定的加速率
+                    car_color = 'green'  # 加速時變為綠色
+                    car_status = texts["accelerating"][language]
+                else:
+                    car_acc = 0
+                    car_color = 'blue'  # 正常速度時為藍色
+                    car_status = texts["normal_driving"][language]
+        else:
+            # 沒有行人時，保持原速
+            if car_v < vehicle_speed:
+                car_acc = accel_rate
+                car_color = 'green'
+                car_status = texts["accelerating"][language]
+            else:
+                car_acc = 0
+                car_color = 'blue'
+                car_status = texts["normal_driving"][language]
+    else:
+        # 已經通過斑馬線或距離太遠，保持正常速度
+        if car_v < vehicle_speed:
+            car_acc = accel_rate
+            car_color = 'green'
+            car_status = texts["accelerating"][language]
+        else:
+            car_acc = 0
+            car_color = 'blue'
+            car_status = texts["normal_driving"][language]
+
+    # 更新車輛速度和位置
+    car_v = max(min(car_v + car_acc * time_step, vehicle_speed), 0)
+    car_x = max(car_x - car_v * time_step, 0)
     car_positions[i] = car_x
 
     # 繪圖區域 / Drawing Area
@@ -227,9 +340,19 @@ for i in range(frames):
         ax.add_patch(stripe)
 
     # 車輛圖形 / Vehicle Drawing
-    car_color = 'red' if not any(p['collision'] for p in pedestrians) else 'black'
     car = Rectangle((car_x - 1, 0.3), 2, 0.4, facecolor=car_color, edgecolor='black', alpha=0.9)
     ax.add_patch(car)
+
+    # 添加速度標記和距離標記 / Add Speed and Distance Labels
+    speed_text = f"{texts['current_speed'][language]}: {car_v:.1f} m/s"
+    ax.text(car_x, 0.8, speed_text, ha='center', va='bottom', 
+            bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
+    
+    # 如果有最近的行人且車輛在偵測範圍內，顯示距離
+    if closest_ped and distance_to_crossing > 0 and distance_to_crossing < detection_distance:
+        distance_text = f"Distance to crossing: {distance_to_crossing:.1f}m"
+        ax.text(car_x, 1.0, distance_text, ha='center', va='bottom',
+                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
 
     # 行人圖形 / Pedestrian Drawing
     for j, ped in enumerate(pedestrians):
@@ -240,11 +363,13 @@ for i in range(frames):
     # 標籤 / Labels
     ax.set_xlabel(texts["distance"][language])
     ax.set_ylabel(texts["position"][language])
-    ax.set_title(f"{texts['time'][language]}: {current_time:.2f}s | {texts['speed'][language]}: {car_v:.2f} m/s")
+    ax.set_title(f"{texts['time'][language]}: {current_time:.2f}s | {car_status}")
 
     # 圖例 / Legend
     ax.legend(handles=[
-        plt.Line2D([0], [0], marker='s', color='w', label=texts["vehicle"][language], markerfacecolor='red'),
+        plt.Line2D([0], [0], marker='s', color='w', label=texts["normal_driving"][language], markerfacecolor='blue'),
+        plt.Line2D([0], [0], marker='s', color='w', label=texts["detecting_pedestrian"][language], markerfacecolor='orange'),
+        plt.Line2D([0], [0], marker='s', color='w', label=texts["accelerating"][language], markerfacecolor='green'),
         plt.Line2D([0], [0], marker='o', color='w', label=texts["crossing"][language], markerfacecolor='green'),
         plt.Line2D([0], [0], marker='o', color='w', label=texts["waiting"][language], markerfacecolor='gray'),
         plt.Line2D([0], [0], marker='o', color='w', label=texts["finished"][language], markerfacecolor='blue'),
